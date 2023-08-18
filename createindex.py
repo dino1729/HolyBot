@@ -1,24 +1,40 @@
 import json
+import time
 import pinecone
 import openai
 import argparse
 import logging
+import dotenv
+import os
+import sys
+import itertools
+
+# Get API key from environment variable
+dotenv.load_dotenv()
+os.environ["OPENAI_API_KEY"] = os.environ["AZURE_API_KEY"]
+openai.api_type = "azure"
+openai.api_base = os.environ.get("AZURE_API_BASE")
+openai.api_key = os.environ.get("AZURE_API_KEY")
+azure_api_key = os.environ.get("AZURE_API_KEY")
+EMBEDDINGS_DEPLOYMENT_NAME = "text-embedding-ada-002"
+pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+pinecone_environment = os.environ.get("PINECONE_ENVIRONMENT")
+
+# Create a logger
+# logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+# logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
 # Create a logger
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
-
 # Create a console handler
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.DEBUG)
-
 # Create a formatter
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
 # Add the formatter to the console handler
 console_handler.setFormatter(formatter)
-
 # Add the console handler to the logger
 logger.addHandler(console_handler)
 
@@ -31,18 +47,12 @@ class CreatePineconeIndex:
             # Parse command-line arguments
             parser = argparse.ArgumentParser()
             parser.add_argument("--holybook", type=str, required=True)
-            parser.add_argument("--pinecone_apikey", type=str, required=True)
-            parser.add_argument("--pinecone_environment",
-                                type=str, required=True)
-            parser.add_argument("--openaikey", type=str, required=True)
-            parser.add_argument("--openaiorg", type=str, required=True)
             args = parser.parse_args()
 
             self.holybook = args.holybook
-            self.pinecone_apikey = args.pinecone_apikey
-            self.pinecone_environment = args.pinecone_environment
-            self.openaikey = args.openaikey
-            self.openaiorg = args.openaiorg
+            self.pinecone_apikey = pinecone_api_key
+            self.pinecone_environment = pinecone_environment
+            self.openaikey = azure_api_key
         except Exception as e:
             logger.error("Error while parsing arguments: {}".format(e))
 
@@ -66,36 +76,26 @@ class CreatePineconeIndex:
 
     # creates openai embeddings
 
+    @staticmethod
+    def chunks(iterable, batch_size=100):
+        it = iter(iterable)
+        chunk = tuple(itertools.islice(it, batch_size))
+        while chunk:
+            yield chunk
+            chunk = tuple(itertools.islice(it, batch_size))
+
     def create_embeddings(self, data):
-
         try:
-            openai.organization = self.openaiorg
-            # get this from top-right dropdown on OpenAI under organization > settings
             openai.api_key = self.openaikey
-            # get API key from top-right dropdown on OpenAI website
-
-            def gen_embeddings(data):
-                response = openai.Embedding.create(
-                    input=data,
-                    model="text-embedding-ada-002"
-                )
-                embeddings = [response['data'][i]['embedding']
-                              for i in range(len(data))]
-
-                return embeddings
-
-            import itertools
-
-            def chunks(iterable, batch_size=100):
-                it = iter(iterable)
-                chunk = tuple(itertools.islice(it, batch_size))
-                while chunk:
-                    yield chunk
-                    chunk = tuple(itertools.islice(it, batch_size))
-
             embeddings = []
-            for chunk in chunks(data, batch_size=1000):
-                embeddings.extend(gen_embeddings(chunk))
+
+            for chunk in self.chunks(data, batch_size=1):
+                response = openai.Embedding.create(
+                    input=chunk,
+                    engine="text-embedding-ada-002"
+                )
+                embeddings.extend([item['embedding'] for item in response['data']])
+                time.sleep(1)
 
             return embeddings
         except Exception as e:
@@ -104,7 +104,6 @@ class CreatePineconeIndex:
     # insert embeddings into pinecone
 
     def insert_embeddings_pinecone(self, embeddings, data):
-
         try:
             self.init_pinecone()
 
@@ -115,7 +114,7 @@ class CreatePineconeIndex:
 
             pinecone.create_index(self.holybook, dimension=len(embeddings[0]))
 
-            # connect to index
+            # Connect to index
             index = pinecone.Index(self.holybook)
 
             keys = list(data.keys())
@@ -123,18 +122,8 @@ class CreatePineconeIndex:
             to_upsert = [(str(keys[i]), list(embeddings[i]))
                          for i in range(len(embeddings))]
 
-            import itertools
-
-            def chunks(iterable, batch_size=100):
-                """A helper function to break an iterable into chunks of size batch_size."""
-                it = iter(iterable)
-                chunk = tuple(itertools.islice(it, batch_size))
-                while chunk:
-                    yield chunk
-                    chunk = tuple(itertools.islice(it, batch_size))
-
             # Upsert data with 100 vectors per upsert request
-            for ids_vectors_chunk in chunks(to_upsert, batch_size=100):
+            for ids_vectors_chunk in self.chunks(to_upsert, batch_size=100):
                 # Assuming `index` defined elsewhere
                 index.upsert(vectors=ids_vectors_chunk)
             logger.info(

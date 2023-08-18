@@ -1,3 +1,4 @@
 pinecone-client
 openai
 gradio
+python-dotenv

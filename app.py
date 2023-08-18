@@ -4,6 +4,19 @@ import gradio as gr
 import json
 import argparse
 import logging
+import dotenv
+import os
+
+# Get API key from environment variable
+dotenv.load_dotenv()
+os.environ["OPENAI_API_KEY"] = os.environ["AZURE_API_KEY"]
+openai.api_type = "azure"
+openai.api_base = os.environ.get("AZURE_API_BASE")
+openai.api_key = os.environ.get("AZURE_API_KEY")
+azure_api_key = os.environ.get("AZURE_API_KEY")
+EMBEDDINGS_DEPLOYMENT_NAME = "text-embedding-ada-002"
+pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+pinecone_environment = os.environ.get("PINECONE_ENVIRONMENT")
 
 # Create a logger
 logger = logging.getLogger()
@@ -31,16 +44,12 @@ class HolyBot:
             # Parse command-line arguments
             parser = argparse.ArgumentParser()
             parser.add_argument("--holybook", type=str, required=True)
-            parser.add_argument("--pinecone_apikey", type=str, required=True)
-            parser.add_argument("--pinecone_environment",
-                                type=str, required=True)
-            parser.add_argument("--openaikey", type=str, required=True)
             args = parser.parse_args()
 
             self.holybook = args.holybook
-            self.pinecone_apikey = args.pinecone_apikey
-            self.pinecone_environment = args.pinecone_environment
-            self.openaikey = args.openaikey
+            self.pinecone_apikey = pinecone_api_key
+            self.pinecone_environment = pinecone_environment
+            self.openaikey = azure_api_key
         except Exception as e:
             logger.error("Error while parsing arguments: {}".format(e))
 
@@ -55,24 +64,20 @@ class HolyBot:
             return "Please enter your query."
 
         openai.api_key = self.openaikey
-
         response = openai.Embedding.create(
-            input=[query], model="text-embedding-ada-002")
+            input=[query], 
+            engine="text-embedding-ada-002",
+            )
         embedding = response["data"][0]["embedding"]
 
         self.init_pinecone()
-
         index = pinecone.Index(self.holybook)
 
         with open(f"{self.holybook}.json", "r") as f:
             data = json.loads(f.read())
-
         res = index.query(vector=(embedding), top_k=8)
-
         ids = [i["id"] for i in res["matches"]]
-
         context = ""
-
         for id in ids:
             context = context + str(id) + ": " + data[str(id)] + "\n\n"
 
@@ -82,13 +87,11 @@ class HolyBot:
             book = self.holybook
 
         logger.info("Book: {}".format(book))
-
         systemprompt = f"You are not an AI Language model. You will be a {book} Assistant to the user. Restrict Yourself to the context of the question."
-
         userprompt = f"Verses:\n\n{context}\n\nQuestion: {query}\n\nAnswer:\n\n"
 
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            engine="gpt-3p5-turbo-16k",
             messages=[
                 {"role": "system", "content": systemprompt},
                 {"role": "user", "content": userprompt},
@@ -96,9 +99,7 @@ class HolyBot:
             max_tokens=256,
             temperature=0.0,
         )
-
         answer = response["choices"][0]["message"]["content"]
-
         return answer, context
 
     def cleartext(self, query, output, references):
@@ -107,10 +108,9 @@ class HolyBot:
         """
         return ["", "", ""]
 
-
 if __name__ == "__main__":
     askbook = HolyBot()
-    with gr.Blocks() as demo:
+    with gr.Blocks(theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             """
         <h1><center><b>Ask a Holy Book</center></h1>
@@ -122,8 +122,7 @@ if __name__ == "__main__":
                 submit_button = gr.Button("Submit")
             with gr.Column():
                 ans_output = gr.Textbox(lines=5, label="Answer.")
-                references = gr.Textbox(
-                    lines=10, label="Relevant Verses.")
+                references = gr.Textbox(lines=10, label="Relevant Verses.")
                 clear_button = gr.Button("Clear")
 
         # Submit button for submitting query.
@@ -135,4 +134,4 @@ if __name__ == "__main__":
             inputs=[query, ans_output, references],
             outputs=[query, ans_output, references],
         )
-    demo.launch(debug=True)
+    demo.launch(server_name='0.0.0.0', server_port=7861)
