@@ -2,3 +2,4 @@ pinecone-client
 openai
 gradio
 python-dotenv
+azure-cosmos
